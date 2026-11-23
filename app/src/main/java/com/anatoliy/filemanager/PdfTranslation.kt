@@ -76,6 +76,7 @@ private class LayoutStripper : PDFTextStripper() {
 
     override fun writeString(text: String, textPositions: MutableList<TextPosition>) {
         if (text.isBlank() || textPositions.isEmpty()) return
+        if (textPositions.any { it.dir != 0f }) return
         val left = textPositions.minOf { it.x }
         val right = textPositions.maxOf { it.x + it.width }
         val bottom = textPositions.maxOf { it.y }
@@ -192,6 +193,7 @@ object PdfTranslation {
         val blocks = result.textBlocks.mapNotNull { block ->
             val rect = block.boundingBox ?: return@mapNotNull null
             val lines = block.lines.ifEmpty { return@mapNotNull null }
+            if (lines.any { abs(it.angle) > 30f }) return@mapNotNull null
             TextBlock(
                 lines.joinToString(" ") { it.text },
                 RectF(rect.left / w, rect.top / h, rect.right / w, rect.bottom / h),
