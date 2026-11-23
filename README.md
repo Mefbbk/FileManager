@@ -1,6 +1,6 @@
 # File Manager (Android)
 
-Файловий менеджер для Android на Kotlin + Jetpack Compose (Material 3). Інтерфейс українською, без сторонніх бібліотек — лише AndroidX і системні API.
+Файловий менеджер для Android на Kotlin + Jetpack Compose (Material 3). Інтерфейс українською. Окрім AndroidX і системних API використовує лише Google ML Kit і PdfBox-Android (для перекладача PDF).
 
 ## Можливості
 
@@ -24,7 +24,8 @@
 - «Поділитися» і «Відкрити в іншому додатку» для будь-якого файлу; встановлення `.apk` натисканням.
 
 ### Вбудовані переглядачі
-- **PDF** на системному `PdfRenderer`.
+- **PDF** на системному `PdfRenderer`, масштаб щипком і подвійним тапом.
+- **Перекладач PDF** — безкоштовний і офлайн (Google ML Kit): текст сторінки береться з PDF або розпізнається зі скану, мова визначається автоматично, переклад українською, англійською, німецькою, польською та ін. Мовна модель (~30 МБ) завантажується один раз, далі текст не залишає телефон.
 - **Фото**: листання по папці, масштаб щипком і подвійним тапом, EXIF-поворот, HEIC.
 - **Текст** (`.txt`, `.log`, `.json`, `.xml`, `.md`, `.csv` …): UTF-8 або windows-1251, зміна розміру шрифту.
 - Додаток з'являється у «Відкрити за допомогою» для PDF, фото і `.txt` з інших додатків.
@@ -59,12 +60,13 @@ app/src/main/java/com/anatoliy/filemanager/
 ├── Zip.kt                 розпакування і стиснення
 ├── Fb2.kt                 обкладинки FB2
 ├── PdfDocument.kt         обгортка над PdfRenderer
+├── PdfTranslation.kt      текст PDF, OCR, визначення мови, переклад
 ├── StoragePermission.kt   доступ до сховища
 ├── FileUtils.kt           форматування, відкриття, «поділитися», встановлення APK
 └── ui/
     ├── FileBrowserScreen.kt, BrowserExtras.kt, BrowserParts.kt, AppDrawer.kt, FileRow.kt
     ├── Thumbnails.kt, PropertiesDialog.kt
-    ├── ImageViewerScreen.kt, PdfViewerScreen.kt, TextViewerScreen.kt
+    ├── ImageViewerScreen.kt, PdfViewerScreen.kt, PdfTranslateScreen.kt, TextViewerScreen.kt
     ├── AnalysisScreen.kt, DuplicatesScreen.kt
     └── UnusedFilesScreen.kt, UnusedFilesViewModel.kt, PermissionScreen.kt
 ```

@@ -25,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -83,6 +84,14 @@ fun PdfViewerScreen(file: File, onBack: () -> Unit) {
     val listState = rememberLazyListState()
     val currentPage by remember { derivedStateOf { listState.firstVisibleItemIndex + 1 } }
     val pageCount = document.getOrNull()?.pageCount ?: 0
+    var translateFrom by remember { mutableStateOf<Int?>(null) }
+
+    val translateDoc = document.getOrNull()
+    val translateStart = translateFrom
+    if (translateDoc != null && translateStart != null) {
+        PdfTranslateScreen(file, translateDoc, translateStart, onClose = { translateFrom = null })
+        return
+    }
 
     Scaffold(
         topBar = {
@@ -98,6 +107,9 @@ fun PdfViewerScreen(file: File, onBack: () -> Unit) {
                 actions = {
                     if (pageCount > 0) {
                         Text("$currentPage / $pageCount", Modifier.padding(end = 4.dp))
+                        IconButton(onClick = { translateFrom = currentPage - 1 }) {
+                            Icon(Icons.Filled.Translate, contentDescription = "Перекласти")
+                        }
                     }
                     IconButton(onClick = { shareFiles(context, listOf(file)) }) {
                         Icon(Icons.Filled.Share, contentDescription = "Поділитися")
