@@ -2,18 +2,22 @@ package com.anatoliy.filemanager.ui
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.os.Environment
-import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.animate
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateCentroid
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -22,17 +26,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Notes
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.SwapHoriz
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -42,17 +42,16 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -61,24 +60,31 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
-import com.anatoliy.filemanager.FileRepository
 import com.anatoliy.filemanager.PageLayout
 import com.anatoliy.filemanager.PageTranslator
 import com.anatoliy.filemanager.PdfDocument
 import com.anatoliy.filemanager.TranslateLanguages
 import com.anatoliy.filemanager.TranslationOverlay
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.io.File
 
 private const val PREF_TARGET = "translate_target"
 private const val PREF_ON_PAGE = "translate_on_page"
+private const val PAGE_MAX_ZOOM = 4f
+private const val PAGE_DOUBLE_TAP_ZOOM = 2.5f
 
 private sealed interface PageState {
     data class Working(val message: String) : PageState
@@ -87,69 +93,25 @@ private sealed interface PageState {
     data class Ready(val source: String, val layout: PageLayout, val sameLanguage: Boolean) : PageState
 }
 
-private fun translatedDestination(context: Context, file: File, target: String): File {
-    val inCache = file.canonicalPath.startsWith(context.cacheDir.canonicalPath)
-    val parent = file.parentFile
-    val dir = if (!inCache && parent != null && parent.canWrite()) {
-        parent
-    } else {
-        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).apply { mkdirs() }
-    }
-    return FileRepository.freeName(dir, File("${file.nameWithoutExtension} ($target).pdf"))
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PdfTranslateScreen(file: File, doc: PdfDocument, startPage: Int, onClose: () -> Unit) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("settings", Context.MODE_PRIVATE) }
-    val scope = rememberCoroutineScope()
-
     var target by remember { mutableStateOf(prefs.getString(PREF_TARGET, null) ?: TranslateLanguages.all.first().first) }
     var sourceOverride by remember { mutableStateOf<String?>(null) }
     var showOriginal by remember { mutableStateOf(false) }
     var onPage by remember { mutableStateOf(prefs.getBoolean(PREF_ON_PAGE, true)) }
 
-    var exportJob by remember { mutableStateOf<Job?>(null) }
-    var exportPage by remember { mutableIntStateOf(0) }
-    var savedFile by remember { mutableStateOf<File?>(null) }
-
     val engine = remember(file) { PageTranslator(context, file, doc) }
     DisposableEffect(engine) {
-        onDispose {
-            exportJob?.cancel()
-            engine.close()
-        }
-    }
-
-    val opened = savedFile
-    if (opened != null) {
-        PdfViewerScreen(opened, onBack = { savedFile = null })
-        return
+        onDispose { engine.close() }
     }
 
     BackHandler(onBack = onClose)
 
     val pagerState = rememberPagerState(initialPage = startPage.coerceIn(0, (doc.pageCount - 1).coerceAtLeast(0))) {
         doc.pageCount
-    }
-
-    fun startExport() {
-        val dest = translatedDestination(context, file, target)
-        exportPage = 0
-        exportJob = scope.launch {
-            try {
-                TranslationOverlay.exportPdf(engine, dest, sourceOverride, target) { exportPage = it }
-                Toast.makeText(context, "Збережено: ${dest.absolutePath}", Toast.LENGTH_LONG).show()
-                savedFile = dest
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                Toast.makeText(context, "Не вдалося зберегти: ${e.message ?: e.javaClass.simpleName}", Toast.LENGTH_LONG).show()
-            } finally {
-                exportJob = null
-            }
-        }
     }
 
     Scaffold(
@@ -179,9 +141,6 @@ fun PdfTranslateScreen(file: File, doc: PdfDocument, startPage: Int, onClose: ()
                         } else {
                             Icon(Icons.Filled.Description, contentDescription = "Показати на сторінці")
                         }
-                    }
-                    IconButton(onClick = { startExport() }, enabled = exportJob == null) {
-                        Icon(Icons.Filled.Save, contentDescription = "Зберегти перекладений PDF")
                     }
                 },
             )
@@ -232,26 +191,6 @@ fun PdfTranslateScreen(file: File, doc: PdfDocument, startPage: Int, onClose: ()
                 )
             }
         }
-    }
-
-    if (exportJob != null) {
-        AlertDialog(
-            onDismissRequest = {},
-            title = { Text("Збереження перекладу") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Сторінка ${(exportPage + 1).coerceAtMost(doc.pageCount)} з ${doc.pageCount}")
-                    LinearProgressIndicator(
-                        progress = { exportPage.toFloat() / doc.pageCount.coerceAtLeast(1) },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = { exportJob?.cancel() }) { Text("Скасувати") }
-            },
-        )
     }
 }
 
@@ -399,33 +338,89 @@ private fun OverlayPage(
             }
         }
 
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        Column(Modifier.fillMaxSize()) {
             StatusLine(state, translated, showOriginal)
             val img = image
             if (img != null) {
-                Image(
-                    bitmap = img.asImageBitmap(),
-                    contentDescription = "Сторінка ${page + 1}",
-                    contentScale = ContentScale.FillWidth,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
-                )
+                ZoomablePage(img, "Сторінка ${page + 1}")
             } else {
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(1f / 1.414f)
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                ) {
+                Box(Modifier.fillMaxSize()) {
                     CircularProgressIndicator(Modifier.align(Alignment.Center))
                 }
             }
-            Text(
-                "Щоб збільшити, збережіть переклад (іконка дискети) — він відкриється як звичайний PDF.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(16.dp),
-            )
         }
+    }
+}
+
+@Composable
+private fun ZoomablePage(image: Bitmap, description: String) {
+    val scope = rememberCoroutineScope()
+    var scale by remember { mutableFloatStateOf(1f) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+
+    BoxWithConstraints(
+        Modifier
+            .fillMaxSize()
+            .clipToBounds()
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        val viewW = constraints.maxWidth.toFloat()
+        val viewH = constraints.maxHeight.toFloat()
+
+        fun clamp(o: Offset, s: Float) = Offset(
+            o.x.coerceIn(-(viewW * (s - 1f)), 0f),
+            o.y.coerceIn(-(viewH * (s - 1f)), 0f),
+        )
+
+        fun zoomTo(newScale: Float, focus: Offset) {
+            val s = newScale.coerceIn(1f, PAGE_MAX_ZOOM)
+            offset = clamp(focus - (focus - offset) * (s / scale), s)
+            scale = s
+        }
+
+        Image(
+            bitmap = image.asImageBitmap(),
+            contentDescription = description,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(Unit) {
+                    detectTapGestures(onDoubleTap = { tap ->
+                        val from = scale
+                        val to = if (from > 1.05f) 1f else PAGE_DOUBLE_TAP_ZOOM
+                        scope.launch { animate(from, to) { value, _ -> zoomTo(value, tap) } }
+                    })
+                }
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false)
+                        do {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            val fingers = event.changes.count { it.pressed }
+                            if (fingers >= 2 || scale > 1f) {
+                                val zoom = event.calculateZoom()
+                                val centroid = event.calculateCentroid(useCurrent = true)
+                                if (fingers >= 2 && zoom != 1f && centroid != Offset.Unspecified) {
+                                    zoomTo(scale * zoom, centroid)
+                                }
+                                offset = clamp(offset + event.calculatePan(), scale)
+                                event.changes.forEach { if (it.positionChanged()) it.consume() }
+                            }
+                        } while (event.changes.any { it.pressed })
+                        if (scale < 1.02f) {
+                            scale = 1f
+                            offset = Offset.Zero
+                        }
+                    }
+                }
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                    translationX = offset.x
+                    translationY = offset.y
+                    transformOrigin = TransformOrigin(0f, 0f)
+                },
+        )
     }
 }
 
