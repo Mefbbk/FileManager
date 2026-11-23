@@ -8,9 +8,11 @@ import android.graphics.RectF
 import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
+import kotlin.math.max
 
 object TranslationOverlay {
-    private const val FIT_STEP = 0.92f
+    private const val FIT_STEP = 0.95f
+    private const val MIN_SHRINK = 0.6f
 
     fun coverRect(block: TextBlock, width: Float, height: Float): RectF {
         val pad = block.lineHeight * height * 0.2f
@@ -59,11 +61,10 @@ object TranslationOverlay {
             val text = texts.getOrNull(i) ?: return@forEachIndexed
             val r = coverRect(block, w, h)
             val bg = background(page, block)
-            fill.color = bg
-            canvas.drawRect(r, fill)
             paint.color = textColor(bg)
-            val start = block.lineHeight * h * 0.9f
-            val minSize = (start * 0.35f).coerceAtLeast(6f)
+            val room = roomBelow(block, blocks, w, h) - r.top
+            val start = block.fontSize * h
+            val minSize = (start * MIN_SHRINK).coerceAtLeast(6f)
             val boxW = r.width().toInt().coerceAtLeast(1)
             var size = start
             var layout: StaticLayout
@@ -74,14 +75,26 @@ object TranslationOverlay {
                     .setLineSpacing(0f, 1f)
                     .setIncludePad(false)
                     .build()
-                if (layout.height <= r.height() || size <= minSize) break
+                if (layout.height <= room || size <= minSize) break
                 size = (size * FIT_STEP).coerceAtLeast(minSize)
             }
+            fill.color = bg
+            canvas.drawRect(r.left, r.top, r.right, max(r.bottom, r.top + layout.height + size * 0.2f), fill)
             canvas.save()
             canvas.translate(r.left, r.top)
             layout.draw(canvas)
             canvas.restore()
         }
         return out
+    }
+
+    private fun roomBelow(block: TextBlock, blocks: List<TextBlock>, w: Float, h: Float): Float {
+        val r = coverRect(block, w, h)
+        val next = blocks.filter { other ->
+            other !== block &&
+                other.box.top >= block.box.bottom - block.lineHeight * 0.3f &&
+                other.box.left < block.box.right && other.box.right > block.box.left
+        }.minOfOrNull { coverRect(it, w, h).top }
+        return max(r.bottom, next ?: (h * 0.98f))
     }
 }

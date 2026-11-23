@@ -53,13 +53,13 @@ suspend fun <T> Task<T>.await(): T = suspendCancellableCoroutine { cont ->
     addOnCanceledListener { cont.cancel() }
 }
 
-class TextBlock(val text: String, val box: RectF, val lineHeight: Float)
+class TextBlock(val text: String, val box: RectF, val lineHeight: Float, val fontSize: Float)
 
 class PageLayout(val blocks: List<TextBlock>, val ocr: Boolean) {
     val text: String get() = blocks.joinToString("\n\n") { it.text }
 }
 
-private class Line(val text: String, val box: RectF)
+private class Line(val text: String, val box: RectF, val fontSize: Float)
 
 fun pageDisplaySize(page: PDPage): Pair<Float, Float> {
     val box = page.cropBox
@@ -80,7 +80,8 @@ private class LayoutStripper : PDFTextStripper() {
         val right = textPositions.maxOf { it.x + it.width }
         val bottom = textPositions.maxOf { it.y }
         val top = textPositions.minOf { it.y - max(it.height, it.fontSizeInPt * 0.7f) }
-        words += Line(text, RectF(left, top, right, bottom))
+        val size = textPositions.map { it.fontSizeInPt }.sorted()[textPositions.size / 2]
+        words += Line(text, RectF(left, top, right, bottom), size)
     }
 
     override fun writeLineSeparator() = flush()
@@ -106,6 +107,7 @@ private class LayoutStripper : PDFTextStripper() {
     private fun merge(parts: List<Line>) = Line(
         parts.joinToString(" ") { it.text },
         RectF(parts.minOf { it.box.left }, parts.minOf { it.box.top }, parts.maxOf { it.box.right }, parts.maxOf { it.box.bottom }),
+        parts.map { it.fontSize }.average().toFloat(),
     )
 }
 
@@ -135,6 +137,8 @@ private fun groupLines(lines: List<Line>, width: Float, height: Float): List<Tex
             text.append(t)
         }
         val lineHeight = group.map { it.box.height() }.average().toFloat()
+        val fontSize = group.map { it.fontSize }.average().toFloat()
+            .takeIf { it > 0f && it < lineHeight * 3f } ?: (lineHeight / 0.7f)
         TextBlock(
             text.toString(),
             RectF(
@@ -144,6 +148,7 @@ private fun groupLines(lines: List<Line>, width: Float, height: Float): List<Tex
                 group.maxOf { it.box.bottom } / height,
             ),
             lineHeight / height,
+            fontSize / height,
         )
     }
 }
@@ -191,6 +196,7 @@ object PdfTranslation {
                 lines.joinToString(" ") { it.text },
                 RectF(rect.left / w, rect.top / h, rect.right / w, rect.bottom / h),
                 rect.height().toFloat() / lines.size / h,
+                lines.mapNotNull { it.boundingBox?.height() }.ifEmpty { listOf(rect.height() / lines.size) }.average().toFloat() * 0.8f / h,
             )
         }
         return PageLayout(blocks, ocr = true)
