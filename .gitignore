@@ -12,3 +12,4 @@
 build_apk.bat
 build_log.txt
 build_exit.txt
+release/
